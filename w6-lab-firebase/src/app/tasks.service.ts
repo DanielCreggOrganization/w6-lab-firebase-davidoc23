@@ -101,18 +101,15 @@ export class TasksService {
     }
   }
 
-  // Return the tasks BehaviorSubject as an observable. This will allow us to subscribe to the tasks array.
-  // The async keyword is not needed here because we are not calling to firestore.
-  readTasks() {
-    return this.tasks$.asObservable(); //returning an Observable version of the tasks$ BehaviorSubject that can be safely exposed to consumers
-  }
+  readTasks(): Observable<Task[]> {
+    const tasksCollection = collection(this.firestore, 'tasks');
+    return collectionData(tasksCollection, { idField: 'id' }) as Observable<Task[]>;
+}
 
-  updateTask(task: Task) {
-    // Use the task id to get the reference to the document
-    const ref = doc(this.firestore, `tasks/${task.id}`);
-    // Update the document. Here we set the value of the content field to the value of the task.content
-    return updateDoc(ref, { content: task.content });
-  }
+async updateTask(task: Task): Promise<void> {
+    const taskRef = doc(this.firestore, `tasks/${task.id}`);
+    await updateDoc(taskRef, { completed: task.completed, content: task.content });
+}
 
   async deleteTask(task: Task) {
     try {
