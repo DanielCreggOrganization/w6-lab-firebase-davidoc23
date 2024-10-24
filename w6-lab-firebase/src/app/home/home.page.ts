@@ -182,4 +182,6 @@ export class HomePage implements AfterViewInit {
       }, 250);
     });
   }
+
+  
 }
