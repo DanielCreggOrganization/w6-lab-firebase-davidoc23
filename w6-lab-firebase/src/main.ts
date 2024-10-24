@@ -12,6 +12,12 @@ bootstrapApplication(AppComponent, {
   providers: [
     { provide: RouteReuseStrategy, useClass: IonicRouteStrategy },
     provideIonicAngular(),
-    provideRouter(routes, withPreloading(PreloadAllModules)), provideFirebaseApp(() => initializeApp({"projectId":"fir-ionic-project-883d7","appId":"1:48854513740:web:1f64aa81b45ab1bb7c5ce9","storageBucket":"fir-ionic-project-883d7.appspot.com","apiKey":"AIzaSyAvOduobh0RiKaSM2UFvtYS-Ra5YUmf2F8","authDomain":"fir-ionic-project-883d7.firebaseapp.com","messagingSenderId":"48854513740"})), provideAuth(() => getAuth()), provideFirestore(() => getFirestore()),
+    provideRouter(routes, withPreloading(PreloadAllModules)), provideFirebaseApp(() => initializeApp(
+      {"projectId":"fir-ionic-project-883d7",
+      "appId":"1:48854513740:web:1f64aa81b45ab1bb7c5ce9",
+      "storageBucket":"fir-ionic-project-883d7.appspot.com",
+      "apiKey":"AIzaSyAvOduobh0RiKaSM2UFvtYS-Ra5YUmf2F8",
+      "authDomain":"fir-ionic-project-883d7.firebaseapp.com",
+      "messagingSenderId":"48854513740"})), provideAuth(() => getAuth()), provideFirestore(() => getFirestore()),
   ],
 });
