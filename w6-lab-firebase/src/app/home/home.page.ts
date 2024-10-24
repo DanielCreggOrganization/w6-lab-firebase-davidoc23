@@ -101,26 +101,36 @@ export class HomePage implements AfterViewInit {
     await this.authService.signOutUser();
     // Navigate to the login page with the replaceUrl option.
     // This means that the login page will replace the home page in the navigation stack.
-    this.router.navigateByUrl('/', { replaceUrl: true });
+    this.router.navigateByUrl('/login', { replaceUrl: true });
   }
 
   // This method is used to add a task to the database
   async addTask() {
     const loading = await this.loadingController.create();
-    // await means that the code will wait for the loading to be presented before continuing
     await loading.present();
-    // Add the task to the database
-    this.tasksService.createTask(this.newTask);
-    // Dismiss the loading
-    await loading.dismiss();
-    // Dismiss the modal
-    this.modal.dismiss(null, 'confirm');
-    // Reset the task. This will clear the input in the modal.
-    this.resetTask();
-  }
+
+    try {
+        // Wait for the task to be added
+        const taskId = await this.tasksService.createTask(this.newTask);
+        console.log("Task added successfully with ID:", taskId);
+
+        // You can show a success message or perform any other action here
+
+    } catch (error) {
+        console.error("Error creating task:", error);
+        // Optionally, show an error message to the user
+    } finally {
+        // Dismiss the loading
+        await loading.dismiss();
+        // Dismiss the modal
+        this.modal.dismiss(null, 'confirm');
+        // Reset the task
+        this.resetTask();
+    }
+}
+
 
   // This method is used to update the checkbox in the UI when the user toggles the checkbox
-
 
   async updateTask() {
     await this.tasksService.updateTask(this.newTask);
