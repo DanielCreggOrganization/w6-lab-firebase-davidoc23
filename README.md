@@ -102,7 +102,7 @@ sequenceDiagram
 
 ```bash
 # Generate auth service
-ionic g service auth --standalone
+ionic g service auth
 
 # Generate login page
 ionic g page login --standalone
@@ -177,7 +177,7 @@ export class AuthService {
    * Gets the current authenticated user
    * @returns The current User or null
    */
-  getCurrentUser(): User | null {
+  fetchActiveUser(): User | null {
     return this.firebaseAuth.currentUser;
   }
 
@@ -202,23 +202,25 @@ export class AuthService {
 
 ```typescript
 // src/app/login/login.page.ts
-/**
- * LoginPage handles user authentication including login, registration,
- * and password reset functionality.
- */
 import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../auth.service';
-import { AlertController, LoadingController } from '@ionic/angular/standalone';
 import { IonicModule } from '@ionic/angular';
-import { FirebaseError } from '@angular/fire/app';
+import { 
+  mailOutline, 
+  lockClosedOutline, 
+  eyeOutline, 
+  eyeOffOutline,
+  logInOutline,
+  personAddOutline 
+} from 'ionicons/icons';
+import { addIcons } from 'ionicons';
 
 @Component({
   selector: 'app-login',
   templateUrl: './login.page.html',
-  styleUrls: ['./login.page.scss'],
   standalone: true,
   imports: [
     CommonModule,
@@ -227,86 +229,45 @@ import { FirebaseError } from '@angular/fire/app';
   ],
 })
 export class LoginPage {
-  private readonly formBuilder = inject(FormBuilder);
-  private readonly loadingController = inject(LoadingController);
-  private readonly alertController = inject(AlertController);
-  private readonly authService = inject(AuthService);
-  private readonly router = inject(Router);
+  private auth = inject(AuthService);
+  private router = inject(Router);
+  private fb = inject(FormBuilder);
 
   isPasswordVisible = false;
 
-  userAuthForm = this.formBuilder.nonNullable.group({
+  userAuthForm = this.fb.nonNullable.group({
     email: ['', [Validators.required, Validators.email]],
     password: ['', [Validators.required, Validators.minLength(6)]],
   });
 
-  get emailControl() {
-    return this.userAuthForm.controls.email;
+  constructor() {
+    addIcons({
+      mailOutline,
+      lockClosedOutline,
+      eyeOutline,
+      eyeOffOutline,
+      logInOutline,
+      personAddOutline
+    });
   }
 
-  get passwordControl() {
-    return this.userAuthForm.controls.password;
-  }
-
-  /**
-   * Handles user registration
-   */
   async handleRegistration() {
-    if (this.userAuthForm.invalid) return;
-
-    const loading = await this.loadingController.create({
-      message: 'Creating account...'
-    });
-    await loading.present();
-
-    try {
-      await this.authService.registerUser(this.userAuthForm.getRawValue());
+    if (this.userAuthForm.valid) {
+      await this.auth.registerUser(this.userAuthForm.getRawValue());
       await this.router.navigateByUrl('/home', { replaceUrl: true });
-    } catch (error) {
-      const errorMessage = (error as FirebaseError).message;
-      await this.showAlert('Registration Failed', errorMessage);
-    } finally {
-      await loading.dismiss();
     }
   }
 
-  /**
-   * Handles user authentication
-   */
   async handleAuthentication() {
-    if (this.userAuthForm.invalid) return;
-
-    const loading = await this.loadingController.create({
-      message: 'Signing in...'
-    });
-    await loading.present();
-
-    try {
-      await this.authService.authenticateUser(this.userAuthForm.getRawValue());
+    if (this.userAuthForm.valid) {
+      await this.auth.authenticateUser(this.userAuthForm.getRawValue());
       await this.router.navigateByUrl('/home', { replaceUrl: true });
-    } catch (error) {
-      const errorMessage = (error as FirebaseError).message;
-      await this.showAlert('Authentication Failed', errorMessage);
-    } finally {
-      await loading.dismiss();
     }
   }
 
-  /**
-   * Initiates password reset process
-   */
- 
+  async handlePasswordReset() {
 
-  /**
-   * Displays an alert with the given header and message
-   */
-  private async showAlert(header: string, message: string) {
-    const alert = await this.alertController.create({
-      header,
-      message,
-      buttons: ['OK'],
-    });
-    await alert.present();
+
   }
 }
 ```
@@ -334,135 +295,126 @@ graph LR
 
 ```typescript
 // src/app/tasks.service.ts
-import { Injectable, inject } from '@angular/core'; // Used to make the service injectable.
-import { Auth, onAuthStateChanged } from '@angular/fire/auth'; // Used to get the current user and subscribe to the auth state.
+/**
+ * This service manages task data using Firebase/Firestore.
+ * It handles user authentication state and provides methods for CRUD operations on tasks.
+ */
+import { Injectable, inject } from '@angular/core';
+import { Auth, onAuthStateChanged } from '@angular/fire/auth';
 import {
-  addDoc, // Used to add a document to Firestore.
-  collection, // Used to create a reference to a collection in Firestore.
-  collectionData, // Used to create an observable that will emit the current value of the tasks array.
-  CollectionReference, // Used to create a reference to a collection in Firestore.
-  deleteDoc, // Used to delete a document in Firestore.
-  doc, // Used to get a reference to a document in Firestore.
-  Firestore, // Used to interact with Firestore.
-  query, // Used to create a query to get the tasks for the current user.
-  updateDoc, // Used to update a document in Firestore.
-  where, // Used to create a query to get the tasks for the current user.
-} from '@angular/fire/firestore'; // Import the functions needed to interact with Firestore.
-import { BehaviorSubject, Observable, Subscription } from 'rxjs'; // Used to create an observable that will emit the current value of the tasks array.
+  collection,
+  collectionData,
+  deleteDoc,
+  doc,
+  Firestore,
+  query,
+  updateDoc,
+  where,
+  addDoc,
+} from '@angular/fire/firestore';
+import { Observable, BehaviorSubject, switchMap, of } from 'rxjs';
 
-// Task is an interface that defines the structure of a task. The ? after the property name means that the property is optional.
+/**
+ * Interface defining the structure of a Task.
+ * @property id - Optional unique identifier (provided by Firestore)
+ * @property content - The task description or content
+ * @property completed - Boolean indicating if the task is done
+ * @property user - Optional user ID who owns the task
+ */
 export interface Task {
-  id?: string;            // The id is optional because Firestore does not store the id in the document.
+  id?: string;
   content: string;
   completed: boolean;
-  user?: string;          // The user id is optional because Firestore does not store the user id in the document.
+  user?: string;
 }
 
-// The @Injectable decorator is used to make the service injectable. The service is injected into the constructor.
-// The providedIn option is used to specify that the service should be provided in the root injector (AppModule).
-// This means that the service will be available to the entire application.
-@Injectable({
-  providedIn: 'root',
-})
+/**
+ * Service responsible for managing tasks in the application.
+ * Uses Firebase Authentication and Firestore for data persistence.
+ */
+@Injectable({ providedIn: 'root' })
 export class TasksService {
+  // Inject Firestore service to interact with Firestore and access tasks collection
+  private readonly firestoreDb = inject(Firestore);
+  // Inject the Auth service to manage user authentication
+  private readonly authService = inject(Auth);
+  // Reference to the 'tasks' collection in Firestore database used to interact with tasks
+  private readonly tasksCollectionRef = collection(this.firestoreDb, 'tasks');
+  
+  /**
+   * BehaviorSubject keeping track of the current authenticated user.
+   * BehaviorSubject is used because it:
+   * 1. Requires an initial value
+   * 2. Caches the latest value
+   * 3. Emits the latest value to new subscribers
+   */
+  private readonly authenticatedUser$ = new BehaviorSubject(this.authService.currentUser);
 
-  private firestore = inject(Firestore);
-  private auth = inject(Auth);
-
-  // Create a reference to the tasks collection. This is a reference to the collection in Firestore.
-  private collectionRef: CollectionReference;
-  // Create a BehaviorSubject observable. This stores the current value of tasks and will emit its current value to any new subscribers immediately upon subscription
-  private tasks$: BehaviorSubject<Task[]> = new BehaviorSubject<Task[]>([]);
-  // Create a subscription to the tasks collection. This is a subscription to the collection in Firestore.
-  private tasksSub!: Subscription;
+  /**
+   * Observable stream of tasks that automatically updates based on authentication state.
+   * Using switchMap to cancel previous subscriptions when user changes and create
+   * new subscriptions for the new user state.
+   */
+  readonly userTasks$ = this.authenticatedUser$.pipe(
+    switchMap(user => !user ? of([]) : 
+      collectionData(
+        query(this.tasksCollectionRef, where('user', '==', user.uid)),
+        { idField: 'id' }
+      ) as Observable<Task[]>
+    )
+  );
 
   constructor() {
-    // Create a reference to the tasks collection. This is a reference to the collection in Firestore.
-    this.collectionRef = collection(this.firestore, 'tasks'); // The second argument is the path to the collection in Firestore.
-    // Subscribe to the auth state. This will allow us to subscribe to the tasks collection when the user logs in.
-    this.subscribeToAuthState();
+    // Set up authentication state listener
+    onAuthStateChanged(this.authService, user => this.authenticatedUser$.next(user));
   }
 
   /**
-   * Subscribes to the authentication state of the application.
-   * This method is called when the authentication state changes (i.e., when a user logs in or out).
-   * If a user is logged in, it subscribes to the tasks of the logged-in user by calling `subscribeToTasks`.
-   * If no user is logged in, it unsubscribes from the tasks by calling `unsubscribeFromTasks`.
+   * Returns an Observable of all tasks for the current user.
+   * The Observable automatically updates when:
+   * 1. User logs in/out
+   * 2. Tasks are added/modified/deleted
    */
-  private subscribeToAuthState(): void {
-    onAuthStateChanged(this.auth, (user) => { // When the authentication state changes, check if a user is logged in. 
-      if (user) { // If a user is logged in
-        this.subscribeToTasks(user.uid); // subscribe to users tasks
-      } else { // If no user is logged in 
-        this.unsubscribeFromTasks(); // unsubscribe from tasks. This will save resources and prevent errors.
-      }
-    });
+  getUserTasks(): Observable<Task[]> {
+    return this.userTasks$;
   }
 
-  private subscribeToTasks(userId: string): void {
-    // Create a query to get only the tasks for the current user.
-    const tasksQuery = query(this.collectionRef, where('user', '==', userId));
-
-    // Create an observable that will emit the current value of the tasks array.
-    const tasks$ = collectionData(tasksQuery, {
-      idField: 'id', // Include the document ID in the emitted data, under the field name 'id'.
-    }) as Observable<Task[]>; // Treat the result of collectionData as an Observable that emits arrays of Task objects
-
-    // Subscribing to an Observable. This is the process of connecting a consumer (usually a function) to the Observable.
-    // When you subscribe to an Observable, you provide a function that will be called each time the Observable emits a new value. 
-    // In this case, the function takes one argument, tasks, which will be the new value emitted by the Observable.
-    this.tasksSub = tasks$.subscribe((tasks) => {
-      this.tasks$.next(tasks); // Calling next emits a new value to its subscribers. In this case, it's emitting the tasks value that was just received from collectionSub and it's emitting it to the tasks$ BehaviorSubject.
-    });
-  }
-
-  // Clear Tasks and unsubscribe from tasks observable. This saves resources and prevents errors.
-  private unsubscribeFromTasks(): void {
-    this.tasks$.next([]); // Clear tasks by emitting an empty array to the tasks$ BehaviorSubject.
-    if (this.tasksSub) { // If there is a subscription to the tasks collection
-      this.tasksSub.unsubscribe(); // unsubscribe from the tasks collection
-    }
-  }
-
-  // Create a task and add it to the tasks collection. This will add a document to the collection on Firestore.
+  /**
+   * Creates a new task in Firestore.
+   * @param task The task to create (without id and user)
+   * @returns Promise that resolves when the task is created
+   */
   async createTask(task: Task) {
-    try {
-      await addDoc(this.collectionRef, { // Add a document to the collection. The first argument is the reference to the collection. The second argument is the document to add to the collection.
-        ...task, // Use the spread operator to add the task properties to the document.
-        user: this.auth.currentUser?.uid, // Add the user id to the document. This will allow us to query the tasks for the current user.
-      });
-    } catch (error) {
-      console.error('Error creating task:', error);
-    }
+    const userId = this.authService.currentUser?.uid;
+    return addDoc(this.tasksCollectionRef, { ...task, user: userId });
   }
 
-  // Return the tasks BehaviorSubject as an observable. This will allow us to subscribe to the tasks array.
-  // The async keyword is not needed here because we are not calling to firestore.
-  readTasks() {
-    return this.tasks$.asObservable(); //returning an Observable version of the tasks$ BehaviorSubject that can be safely exposed to consumers
+  /**
+   * Updates an existing task's content in Firestore.
+   * @param task The task to update (must include id)
+   * @returns Promise that resolves when the update is complete
+   */
+  async updateTask({ id, content }: Task) {
+    return updateDoc(doc(this.firestoreDb, `tasks/${id}`), { content });
   }
 
-  updateTask(task: Task) {
-    // Use the task id to get the reference to the document
-    const ref = doc(this.firestore, `tasks/${task.id}`);
-    // Update the document. Here we set the value of the content field to the value of the task.content
-    return updateDoc(ref, { content: task.content });
+  /**
+   * Deletes a task from Firestore.
+   * @param task The task to delete (must include id)
+   * @returns Promise that resolves when the deletion is complete
+   */
+  async deleteTask({ id }: Task) {
+    return deleteDoc(doc(this.firestoreDb, `tasks/${id}`));
   }
 
-  async deleteTask(task: Task) {
-    try {
-      // Use the task id to get the reference to the document
-      const ref = doc(this.firestore, `tasks/${task.id}`);
-      // Delete the document
-      await deleteDoc(ref);
-    } catch (error) {
-      // Log the error to the console
-      console.error('Error deleting document: ', error);
-    }
+  /**
+   * Toggles the completed status of a task in Firestore.
+   * @param task The task to toggle (must include id and completed status)
+   * @returns Promise that resolves when the update is complete
+   */
+  async toggleTaskCompleted({ id, completed }: Task) {
+    return updateDoc(doc(this.firestoreDb, `tasks/${id}`), { completed });
   }
-
-  // This method is used update the checkbox in the Firestore database when the user toggles the checkbox in the UI.
-
 }
 ```
 
@@ -471,49 +423,41 @@ We will use the Home page to dispay all tasks.
 
 ```typescript
 // src/app/home/home.page.ts
-import { AfterViewInit, Component, ViewChild, inject, OnInit } from '@angular/core';
+import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
-import { FormsModule } from '@angular/forms';
 import {
-  AlertController, 
-  LoadingController, 
-  CheckboxCustomEvent, 
-  IonHeader, 
-  IonToolbar, 
-  IonTitle, 
-  IonContent, 
-  IonButton, 
+  AlertController,
+  IonHeader,
+  IonToolbar,
+  IonTitle,
+  IonContent,
+  IonButton,
   IonButtons,
-  IonList, 
-  IonItemSliding, 
-  IonItem, 
+  IonList,
+  IonItemSliding,
+  IonItem,
   IonLabel,
   IonIcon,
-  IonCheckbox, 
-  IonItemOptions, 
-  IonItemOption, 
-  IonModal, 
-  IonInput, 
-  IonRow, 
-  IonCol, 
-  IonFab, 
-  IonFabButton, 
+  IonCheckbox,
+  IonItemOptions,
+  IonItemOption,
+  IonFooter,
+  IonText,
+  IonFab,
+  IonFabButton,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { Observable } from 'rxjs';
 import { logOutOutline, pencilOutline, trashOutline, add } from 'ionicons/icons';
 import { AuthService } from '../auth.service';
 import { TasksService, Task } from '../tasks.service';
 
 @Component({
   selector: 'app-home',
-  templateUrl: 'home.page.html',
-  styleUrls: ['home.page.scss'],
+  templateUrl: './home.page.html',
   standalone: true,
   imports: [
     CommonModule,
-    FormsModule,
     IonHeader,
     IonToolbar,
     IonTitle,
@@ -528,241 +472,162 @@ import { TasksService, Task } from '../tasks.service';
     IonCheckbox,
     IonItemOptions,
     IonItemOption,
-    IonModal,
-    IonInput,
-    IonRow,
-    IonCol,
+    IonFooter,
+    IonText,
     IonFab,
     IonFabButton,
   ],
 })
-
-export class HomePage implements AfterViewInit {
-  newTask!: Task; // This is the task that will be added to the database.
-  @ViewChild(IonModal) modal!: IonModal; // Find the first IonModal in my template and assign it to the modal property of my class.
-  tasks$!: Observable<Task[]>; // This is an observable that will emit the current value of the tasks array. // This is an observable that will emit the current value of the tasks array.
-  
+export class HomePage {
   private authService = inject(AuthService);
   private tasksService = inject(TasksService);
-  private router = inject(Router);
-  private loadingController = inject(LoadingController);
+  private routerService = inject(Router);
   private alertController = inject(AlertController);
 
+  // Get the user's tasks from the tasks service
+  userTasks$ = this.tasksService.getUserTasks();
+  // Get the current user from the auth service to display the user's email at the bottom of the page
+  currentUser = this.authService.fetchActiveUser();
+
   constructor() {
-    //this.resetTask();
-    //addIcons({ logOutOutline, pencilOutline, trashOutline, add });
-  }
-
-  ngOnInit() {
-    this.resetTask();
+    // Add the necessary icons to the page
     addIcons({ logOutOutline, pencilOutline, trashOutline, add });
-    this.tasks$ = this.tasksService.readTasks();
   }
 
-  // This method is used to reset the newTask property. This will clear the input in the modal.
-  resetTask() {
-    this.newTask = {
-      content: '',
-      completed: false,
-    };
-  }
-
-  // This method is used to log the user out. The button will be found in the top right corner of the home page.
-  async logout() {
-    // Call the logout method in the auth service. Use await to wait for the logout to complete before continuing.
-    await this.authService.logout();
-    // Navigate to the login page with the replaceUrl option.
-    // This means that the login page will replace the home page in the navigation stack.
-    this.router.navigateByUrl('/', { replaceUrl: true });
-  }
-
-  // This method is used to add a task to the database
   async addTask() {
-    const loading = await this.loadingController.create();
-    // await means that the code will wait for the loading to be presented before continuing
-    await loading.present();
-    // Add the task to the database
-    this.tasksService.createTask(this.newTask);
-    // Dismiss the loading
-    await loading.dismiss();
-    // Dismiss the modal
-    this.modal.dismiss(null, 'confirm');
-    // Reset the task. This will clear the input in the modal.
-    this.resetTask();
-  }
-
-  // This method is used to update the checkbox in the UI when the user toggles the checkbox
-
-
-  async updateTask() {
-    await this.tasksService.updateTask(this.newTask);
-    this.resetTask();
-  }
-
-  async openUpdateInput(task: Task) {
     const alert = await this.alertController.create({
-      header: 'Update Task',
+      header: 'New Task',
       inputs: [
         {
-          name: 'Task',
+          name: 'content',
           type: 'text',
-          placeholder: 'Task content',
-          value: task.content,
-        },
+          placeholder: 'Enter task description'
+        }
       ],
       buttons: [
+        { text: 'Cancel', role: 'cancel' },
         {
-          text: 'Cancel',
-          role: 'cancel',
-        },
-        {
-          text: 'Update',
-          // Call the updateTask method when the user clicks the update button
+          text: 'Add',
           handler: (data) => {
-            task.content = data.Task;
-            this.tasksService.updateTask(task);
-          },
+            if (data.content?.trim()) {
+              this.tasksService.createTask({
+                content: data.content,
+                completed: false
+              });
+            }
+          }
+        }
+      ]
+    });
+
+    await alert.present();
+  }
+
+  async toggleTask(event: Event, task: Task) {
+    task.completed = (event as CustomEvent).detail.checked;
+    await this.tasksService.toggleTaskCompleted(task);
+  }
+
+  async editTask(task: Task, slidingItem: IonItemSliding) {
+    const alert = await this.alertController.create({
+      header: 'Update Task',
+      inputs: [{ 
+        name: 'content', 
+        value: task.content, 
+        type: 'text' 
+      }],
+      buttons: [
+        { 
+          text: 'Cancel', 
+          role: 'cancel',
+          handler: () => slidingItem.close()
         },
-      ],
+        { 
+          text: 'Update',
+          handler: (data) => {
+            this.tasksService.updateTask({ ...task, content: data.content });
+            slidingItem.close();
+          }
+        }
+      ]
     });
-    await alert.present(); // Present the alert to the user
-    // Get the alert's first input element and focus the mouse blinker on it.
-    // The setTimeout function is used to allow some time for the browser to render the alert's DOM elements.
-    setTimeout(() => {
-      const firstInput: any = document.querySelector('ion-alert input');
-      firstInput.focus();
-    }, 250);
+
+    await alert.present();
   }
 
-  deleteTask(task: Task) {
-    // Print task to console
-    console.log('Deleting task: ', task);
-    this.tasksService.deleteTask(task);
+  async deleteTask(task: Task) {
+    await this.tasksService.deleteTask(task);
   }
 
-  // The method is used inside the modal to close the modal and reset the newTask property.
-  cancel() {
-    this.modal.dismiss(null, 'cancel');
-    this.resetTask();
-  }
-
-  // This method is used to focus the cursor in the input box of the modal when we open it. We subscribe to
-  // the ionModalDidPresent event of the modal. When the modal is presented, we use setTimeout to wait for
-  // the browser to render the modal's DOM elements, then we select the first input element in the modal and focus on it.
-  ngAfterViewInit() {
-    this.modal.ionModalDidPresent.subscribe(() => {
-      setTimeout(() => {
-        const firstInput: any = document.querySelector('ion-modal input');
-        firstInput.focus();
-      }, 250);
-    });
+  async signOut() {
+    await this.authService.signOutUser();
+    await this.routerService.navigateByUrl('/', { replaceUrl: true });
   }
 }
 ```
-Here is the Template for the home page
+
+Here is the Template for the home page.
+
 ```html
-<!-- Add a header to the page with a logout button and the title "My Tasks" -->
 <ion-header>
   <ion-toolbar color="primary">
+    <ion-title>Tasks</ion-title>
     <ion-buttons slot="end">
-      <ion-button (click)="logout()">
+      <ion-button (click)="signOut()">
         <ion-icon slot="icon-only" name="log-out-outline"></ion-icon>
       </ion-button>
     </ion-buttons>
-    <ion-title> My Tasks </ion-title>
   </ion-toolbar>
 </ion-header>
 
 <ion-content>
   <ion-list>
-    <!-- The tasks array is an observable that emits an array of tasks. The | async pipe is used to subscribe 
-         to the tasks observable and unwrap the emitted value. The home.page.html file knows about the tasks 
-         property because it is bound to it using the *ngFor directive. The *ngFor directive is used to loop 
-         over the tasks array and generate HTML elements for each task.-->
-    <ion-item-sliding *ngFor = "let task of tasks$ | async">
-      <ion-item>
-        <!-- Display the task content -->
-        <ion-label>
-          <h3>{{task.content}}</h3>
-        </ion-label>
-        <!-- Display a checkbox to mark the task as completed. Use event binding that listens for the ionChange event. 
-             This event is emitted by Ionic components when their value changes (i.e. the tick box is checked or unchecked)
-             [checked]="task.completed" is an example of property binding.the checked property of an element is being bound
-             to the completed property of the task object   -->
+    <!-- Empty state -->
+    @if ((userTasks$ | async)?.length === 0) {
+    <ion-item>
+      <ion-label class="ion-text-center">
+        <p>Add your first task!</p>
+      </ion-label>
+    </ion-item>
+    }
 
+    <!-- Task list -->
+    @for (task of userTasks$ | async; track task.id) {
+    <ion-item-sliding #slidingItem>
+      <ion-item>
+        <ion-label [color]="task.completed ? 'medium' : ''">
+          {{task.content}}
+        </ion-label>
       </ion-item>
-      <!-- Create a sliding button to edit the task title or delete the task -->
-      <ion-item-options side="end">
+
+      <ion-item-options>
+        <ion-item-option color="primary" (click)="editTask(task, slidingItem)">
+          <ion-icon name="pencil-outline"></ion-icon>
+        </ion-item-option>
         <ion-item-option color="danger" (click)="deleteTask(task)">
-          <ion-icon name="trash-outline" slot="icon-only"></ion-icon>
+          <ion-icon name="trash-outline"></ion-icon>
         </ion-item-option>
       </ion-item-options>
     </ion-item-sliding>
+    }
   </ion-list>
-
-  <!-- Create a pop up modal to add a new task. Trigger the modal with FAB button created below. -->
-  <!-- #modal is used to access the modal in the template -->
-  <ion-modal trigger="open-modal" #modal>
-    <!-- ng-template is used with the ViewChild decorator to create a template reference variable, 
-         which is then used to present the modal. The ViewChild decorator is used to access the modal
-         in the component class. The #modal variable is used to access the modal in the template.-->
-    <ng-template>
-      <!-- In the modal, create an input to enter a new task. Use two-way binding to bind the input to the newTask property -->
-      <ion-item>
-        <ion-label position="stacked">New Task</ion-label>
-        <ion-input
-          type="text"
-          placeholder="Enter task content here..."
-          [(ngModel)]="newTask.content"
-        ></ion-input>
-      </ion-item>
-
-      <!-- Add buttons in the modal to save or cancel the task entry. Place them side by side using rows and columns. -->
-      <ion-row>
-        <ion-col>
-          <ion-button (click)="addTask()" color="primary" expand="full">
-            Save
-          </ion-button>
-        </ion-col>
-        <ion-col>
-          <ion-button (click)="cancel()" color="danger" expand="full">
-            Cancel
-          </ion-button>
-        </ion-col>
-      </ion-row>
-    </ng-template>
-  </ion-modal>
-
-  <!-- FAB = Floating Action Button. This creates a button that is always visible on the screen.
-       The button contains a plus symbol and is used to add a new task -->
-  <ion-fab slot="fixed" vertical="bottom" horizontal="end">
-    <ion-fab-button id="open-modal">
-      <ion-icon name="add"></ion-icon>
-    </ion-fab-button>
-  </ion-fab>
 </ion-content>
+
+<ion-footer class="ion-no-border">
+  <ion-toolbar class="ion-text-center">
+    <ion-buttons slot="end">
+      <ion-button (click)="addTask()" fill="solid" color="primary" class="ion-no-margin" shape="round">
+        <ion-icon slot="icon-only" name="add" color="light"></ion-icon>
+      </ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+</ion-footer>
 ```
 
 ### DIY Tasks
-
-1. Add a method to toggle the Task completed atribute. Use a checkbox as seen in the image above.
-2. Update *ngFor to @For
-3. Add the toggle ckeck box
-4. Add a sliding button to edit the Task.
-
-## Common Issues and Troubleshooting
-
-1. Firebase Initialization Errors:
-   - Check if environment variables are correctly configured
-   - Ensure Firebase services are enabled in console
-
-2. Authentication Errors:
-   - Verify email/password requirements
-   - Check Firebase console for auth settings
-
-3. Firestore Permission Errors:
-   - Review security rules
-   - Verify user authentication state
+1. Add a check box to each task to toggle the task complete attribute.
+2. Add a "Logged in user: user email" to the bottom of the home page. Hint: Use an ion-text item in the footer.
+3. Add Try catch error checking to the methods in you auth and tasks services.
 
 ## Additional Resources
 
